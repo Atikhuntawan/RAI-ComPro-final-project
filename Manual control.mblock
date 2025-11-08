@@ -1,0 +1,103 @@
+# === CyberPi / mBlock (Python-only, Live) ===
+import time
+import gamepad, mbot2
+
+# ---------- CONFIG ----------
+MAX_EM      = 200
+DEADZONE    = 8
+
+# ล้อ/พอร์ต
+EM_L_SIGN   = -1
+EM_R_SIGN   = -1
+EM_SWAP     = True
+
+# แกนจอย
+FWD_AXIS    = 'Lx'
+FWD_SIGN    = -1
+TURN_AXIS   = 'Ly'
+TURN_SIGN   = -1
+
+# มอเตอร์ DC
+M1_FWD      = 200
+M1_REV      = -200
+M2_FWD      = 200
+
+# เซอร์โว
+SERVO1_PORT = 's1'
+SERVO2_PORT = 's4'
+SERVO3_PORT = 's2'
+# ---------------------------
+
+# ---------- INIT ----------
+mbot2.drive_speed(0, 0)
+mbot2.motor_set(0, 'M1')
+mbot2.motor_set(0, 'M2')
+mbot2.servo_set(0,   SERVO1_PORT)   # servo1 เริ่ม 0°
+mbot2.servo_set(170, SERVO2_PORT)   # servo2 เริ่ม 170°
+
+s2_pending = False
+s2_due     = 0.0
+prev = {'N1':False, 'N2':False, 'N3':False, 'N4':False, 'Up':False}
+
+def dz(v): return 0 if abs(v) < DEADZONE else v
+def clamp(v, lo, hi): return lo if v < lo else hi if v > hi else v
+
+def arcade_mix(lx, ly):
+    ax_fwd  = gamepad.get_joystick(FWD_AXIS)
+    ax_turn = gamepad.get_joystick(TURN_AXIS)
+    fwd  = FWD_SIGN  * dz(ax_fwd)  / 100.0
+    turn = TURN_SIGN * dz(ax_turn) / 100.0
+    L = int(clamp((fwd + turn) * MAX_EM, -MAX_EM, MAX_EM)) * EM_L_SIGN
+    R = int(clamp((fwd - turn) * MAX_EM, -MAX_EM, MAX_EM)) * EM_R_SIGN
+    return L, R
+# ---------------------------
+
+while True:
+    # 1) จอยขับเคลื่อน EM1/EM2
+    L, R = arcade_mix('Lx','Ly')
+    mbot2.drive_speed(R, L) if EM_SWAP else mbot2.drive_speed(L, R)
+
+    # 2) R1/R2 คุม DC M1
+    r1 = gamepad.is_key_pressed('R1')
+    r2 = gamepad.is_key_pressed('R2')
+    if r1 and not r2:   mbot2.motor_set(M1_FWD, 'M1')
+    elif r2 and not r1: mbot2.motor_set(M1_REV, 'M1')
+    else:               mbot2.motor_set(0, 'M1')
+
+    # 3) L1 คุม DC M2 + เซอร์โว 360° s2
+    l1 = gamepad.is_key_pressed('L1')
+    if l1:
+        mbot2.motor_set(M2_FWD, 'M2')
+        mbot2.servo_set(0, 's2')       # 360° เร็วสุดทิศหนึ่ง
+    else:
+        mbot2.motor_set(0, 'M2')
+        mbot2.servo_set(90, 's2')      # 360° หยุด
+
+    # 4) N1/N2/N4 คุม servo1 (40° / 0° / 135°)
+    n1 = gamepad.is_key_pressed('N1')
+    n2 = gamepad.is_key_pressed('N2')
+    n4 = gamepad.is_key_pressed('N4')
+    if n1 and not prev['N1']: mbot2.servo_set(40, SERVO1_PORT)
+    if n2 and not prev['N2']: mbot2.servo_set(0,  SERVO1_PORT)
+    if n4 and not prev['N4']: mbot2.servo_set(135, SERVO1_PORT)
+    prev['N1'] = n1; prev['N2'] = n2; prev['N4'] = n4
+
+    # 4.1) D-pad Up เท่านั้น -> servo1 ไป 50°
+    up = gamepad.is_key_pressed('Up')
+    if up and not prev['Up']:
+        mbot2.servo_set(50, SERVO1_PORT)
+    prev['Up'] = up
+
+    # 5) N3: servo2 (s4) = 130° แล้ว 2 วิ -> 170°
+    n3 = gamepad.is_key_pressed('N3')
+    if n3 and not prev['N3']:
+        mbot2.servo_set(130, SERVO2_PORT)
+        s2_pending = True
+        s2_due = time.time() + 2.0
+    prev['N3'] = n3
+
+    if s2_pending and time.time() >= s2_due:
+        mbot2.servo_set(170, SERVO2_PORT)
+        s2_pending = False
+
+    time.sleep(0.02)
